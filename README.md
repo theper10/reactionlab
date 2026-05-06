@@ -6,9 +6,7 @@ The app measures your reaction speed in milliseconds, tracks your recent attempt
 
 ## Demo
 
-```text
 https://theper10.github.io/reactionlab/
-```
 
 ## Features
 

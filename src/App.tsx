@@ -7,6 +7,7 @@ import {
   type ChangeEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type PointerEvent,
 } from "react";
 
 type TestState = "idle" | "waiting" | "ready" | "result" | "falseStart";
@@ -122,14 +123,32 @@ function App() {
   const [roundResults, setRoundResults] = useState<number[]>([]);
 
   const timerRef = useRef<number | null>(null);
-  const readyAtRef = useRef<number | null>(null);
+  const readyAnimationFrameRef = useRef<number | null>(null);
+  const readyStartTimeRef = useRef<number | null>(null);
+  const readyInputEnabledRef = useRef(false);
   const resultLockedRef = useRef(false);
+  const suppressNextClickRef = useRef(false);
+  const suppressClickUntilRef = useRef(0);
+  const testStateRef = useRef<TestState>("idle");
+  const trialIdRef = useRef(0);
 
   const clearPendingTimer = useCallback(() => {
     if (timerRef.current !== null) {
       window.clearTimeout(timerRef.current);
       timerRef.current = null;
     }
+  }, []);
+
+  const clearReadyAnimationFrame = useCallback(() => {
+    if (readyAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(readyAnimationFrameRef.current);
+      readyAnimationFrameRef.current = null;
+    }
+  }, []);
+
+  const setTestStateSafely = useCallback((nextState: TestState) => {
+    testStateRef.current = nextState;
+    setTestState(nextState);
   }, []);
 
   const persistAttempts = useCallback((nextAttempts: Attempt[]) => {
@@ -141,8 +160,42 @@ function App() {
   }, []);
 
   useEffect(() => {
-    return () => clearPendingTimer();
-  }, [clearPendingTimer]);
+    return () => {
+      clearPendingTimer();
+      clearReadyAnimationFrame();
+    };
+  }, [clearPendingTimer, clearReadyAnimationFrame]);
+
+  useEffect(() => {
+    if (testState !== "ready") {
+      return;
+    }
+
+    const activeTrialId = trialIdRef.current;
+    readyStartTimeRef.current = null;
+    readyInputEnabledRef.current = false;
+    resultLockedRef.current = true;
+
+    // React state updates are async, so the timeout only requests the green UI.
+    // The timer is armed from the next animation frame after the ready render has
+    // committed, keeping input disabled during the tiny paint gap.
+    readyAnimationFrameRef.current = window.requestAnimationFrame(() => {
+      readyAnimationFrameRef.current = null;
+
+      if (
+        trialIdRef.current !== activeTrialId ||
+        testStateRef.current !== "ready"
+      ) {
+        return;
+      }
+
+      readyStartTimeRef.current = performance.now();
+      readyInputEnabledRef.current = true;
+      resultLockedRef.current = false;
+    });
+
+    return () => clearReadyAnimationFrame();
+  }, [clearReadyAnimationFrame, testState]);
 
   const stats = useMemo(() => {
     const count = attempts.length;
@@ -179,39 +232,57 @@ function App() {
 
   const startTrial = useCallback(() => {
     clearPendingTimer();
-    readyAtRef.current = null;
+    clearReadyAnimationFrame();
+    trialIdRef.current += 1;
+    const activeTrialId = trialIdRef.current;
+    readyStartTimeRef.current = null;
+    readyInputEnabledRef.current = false;
     resultLockedRef.current = false;
     setLatestResult(null);
-    setTestState("waiting");
+    setTestStateSafely("waiting");
 
     // The delay is intentionally randomized after each start so anticipation cannot
-    // be learned. The ready timestamp is captured with performance.now() inside
-    // the timeout callback, at the exact moment the UI moves to green.
+    // be learned. The timeout no longer starts the reaction clock; it only asks
+    // React to render the green state. The ready effect above arms timing after
+    // that render has reached an animation frame.
     timerRef.current = window.setTimeout(() => {
+      if (trialIdRef.current !== activeTrialId) {
+        return;
+      }
+
       timerRef.current = null;
-      readyAtRef.current = performance.now();
-      resultLockedRef.current = false;
-      setTestState("ready");
+      readyStartTimeRef.current = null;
+      readyInputEnabledRef.current = false;
+      resultLockedRef.current = true;
+      setTestStateSafely("ready");
     }, getRandomDelay());
-  }, [clearPendingTimer]);
+  }, [clearPendingTimer, clearReadyAnimationFrame, setTestStateSafely]);
 
   const resetToIdle = useCallback(() => {
     clearPendingTimer();
-    readyAtRef.current = null;
+    clearReadyAnimationFrame();
+    trialIdRef.current += 1;
+    readyStartTimeRef.current = null;
+    readyInputEnabledRef.current = false;
     resultLockedRef.current = false;
     setLatestResult(null);
-    setTestState("idle");
-  }, [clearPendingTimer]);
+    setTestStateSafely("idle");
+  }, [clearPendingTimer, clearReadyAnimationFrame, setTestStateSafely]);
 
-  const recordResult = useCallback(() => {
-    if (resultLockedRef.current || readyAtRef.current === null) {
+  const recordResult = useCallback((inputTime: number) => {
+    if (
+      resultLockedRef.current ||
+      !readyInputEnabledRef.current ||
+      readyStartTimeRef.current === null
+    ) {
       return;
     }
 
     // Lock before setting state so rapid double-clicks, touch/click pairs, or key
     // repeat cannot write multiple attempts for the same green screen.
     resultLockedRef.current = true;
-    const reactionTime = performance.now() - readyAtRef.current;
+    readyInputEnabledRef.current = false;
+    const reactionTime = inputTime - readyStartTimeRef.current;
     const roundedReactionTime = Math.max(0, Math.round(reactionTime));
     const nextAttempt: Attempt = {
       id: getAttemptId(),
@@ -235,43 +306,79 @@ function App() {
 
       return [...currentResults, roundedReactionTime];
     });
-    readyAtRef.current = null;
-    setTestState("result");
-  }, [isFiveRoundMode, persistAttempts]);
+    readyStartTimeRef.current = null;
+    setTestStateSafely("result");
+  }, [isFiveRoundMode, persistAttempts, setTestStateSafely]);
 
   const triggerFalseStart = useCallback(() => {
     clearPendingTimer();
-    readyAtRef.current = null;
+    clearReadyAnimationFrame();
+    trialIdRef.current += 1;
+    readyStartTimeRef.current = null;
+    readyInputEnabledRef.current = false;
     resultLockedRef.current = true;
     setLatestResult(null);
-    setTestState("falseStart");
-  }, [clearPendingTimer]);
+    setTestStateSafely("falseStart");
+  }, [clearPendingTimer, clearReadyAnimationFrame, setTestStateSafely]);
 
-  const handlePrimaryAction = useCallback(() => {
+  const handlePrimaryAction = useCallback((inputTime: number) => {
     if (hasFinishedFiveRound) {
       return;
     }
 
-    if (testState === "idle") {
+    const currentState = testStateRef.current;
+
+    if (currentState === "idle") {
       startTrial();
       return;
     }
 
-    if (testState === "waiting") {
+    if (currentState === "waiting") {
       triggerFalseStart();
       return;
     }
 
-    if (testState === "ready") {
-      recordResult();
+    if (currentState === "ready") {
+      recordResult(inputTime);
     }
   }, [
     hasFinishedFiveRound,
     recordResult,
     startTrial,
-    testState,
     triggerFalseStart,
   ]);
+
+  const handlePanelPointerDown = (event: PointerEvent<HTMLButtonElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+
+    const inputTime = performance.now();
+    suppressNextClickRef.current = true;
+
+    // Pointer down is used for mouse and touch so the measured input moment is
+    // when the user presses, not when a later click fires after release.
+    handlePrimaryAction(inputTime);
+  };
+
+  const handlePanelClick = () => {
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false;
+      return;
+    }
+
+    if (performance.now() < suppressClickUntilRef.current) {
+      return;
+    }
+
+    // Fallback for assistive technology or any browser path that activates the
+    // button without a PointerEvent. Pointer-origin clicks are suppressed above.
+    handlePrimaryAction(performance.now());
+  };
+
+  const handlePanelPointerCancel = () => {
+    suppressNextClickRef.current = false;
+  };
 
   const handlePanelKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (event.key !== " " && event.key !== "Enter") {
@@ -280,7 +387,9 @@ function App() {
 
     event.preventDefault();
     if (!event.repeat) {
-      handlePrimaryAction();
+      const inputTime = performance.now();
+      suppressClickUntilRef.current = inputTime + 1_000;
+      handlePrimaryAction(inputTime);
     }
   };
 
@@ -301,12 +410,15 @@ function App() {
 
   const handleResetStats = () => {
     clearPendingTimer();
-    readyAtRef.current = null;
+    clearReadyAnimationFrame();
+    trialIdRef.current += 1;
+    readyStartTimeRef.current = null;
+    readyInputEnabledRef.current = false;
     resultLockedRef.current = false;
     setAttempts([]);
     setLatestResult(null);
     setRoundResults([]);
-    setTestState("idle");
+    setTestStateSafely("idle");
 
     try {
       window.localStorage.removeItem(STORAGE_KEY);
@@ -319,16 +431,18 @@ function App() {
     <main className="min-h-screen bg-[#f7f8fb] text-slate-950">
       <div className="p-4 sm:p-6">
         <section
-          className={`relative mx-auto flex min-h-[calc(100svh-2rem)] max-w-7xl select-none flex-col items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br ${panel.tone} p-6 text-center text-white shadow-panel transition-colors duration-500 ease-out sm:min-h-[calc(100svh-3rem)] sm:p-10`}
+          className={`relative mx-auto flex min-h-[calc(100svh-2rem)] max-w-7xl select-none flex-col items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br ${panel.tone} p-6 text-center text-white shadow-panel sm:min-h-[calc(100svh-3rem)] sm:p-10`}
           aria-live="polite"
         >
           {isPanelInteractive && !hasFinishedFiveRound && (
             <button
               type="button"
               data-testid="reaction-panel-action"
-              className="absolute inset-0 z-10 cursor-pointer rounded-lg focus-visible:outline focus-visible:outline-4 focus-visible:outline-offset-[-10px] focus-visible:outline-white/90"
+              className="absolute inset-0 z-10 cursor-pointer touch-manipulation rounded-lg focus-visible:outline focus-visible:outline-4 focus-visible:outline-offset-[-10px] focus-visible:outline-white/90"
               aria-label={`${panel.title} ${panel.subtitle}`}
-              onClick={handlePrimaryAction}
+              onPointerDown={handlePanelPointerDown}
+              onPointerCancel={handlePanelPointerCancel}
+              onClick={handlePanelClick}
               onKeyDown={handlePanelKeyDown}
             >
               <span className="sr-only">{panel.title}</span>
@@ -498,7 +612,7 @@ function StatCard({
         {label}
       </p>
       <p className="mt-2 text-2xl font-black tracking-normal text-slate-950 sm:text-3xl">
-        {value === null ? "—" : isCount ? value : formatMs(value)}
+        {value === null ? "-" : isCount ? value : formatMs(value)}
       </p>
     </div>
   );
