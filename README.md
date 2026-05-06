@@ -1,15 +1,13 @@
-# ReflexRush
+# ReactionLab
 
-ReflexRush is a simple reaction time testing website inspired by classic benchmark-style reflex tests. The goal is straightforward: wait for the screen to turn green, then click as fast as possible.
+ReactionLab is a simple reaction time testing website inspired by classic benchmark-style reflex tests. The goal is straightforward: wait for the screen to turn green, then click as fast as possible.
 
 The app measures your reaction speed in milliseconds, tracks your recent attempts, and shows basic stats like your latest time, best time, average time, and total attempts.
 
 ## Demo
 
-Add your live demo link here once deployed:
-
 ```text
-https://your-demo-link.com
+https://theper10.github.io/reactionlab/
 ```
 
 ## Features
@@ -58,13 +56,13 @@ npm -v
 Clone the repository:
 
 ```bash
-git clone https://github.com/your-username/reflexrush.git
+git clone https://github.com/theper10/reactionlab.git
 ```
 
 Go into the project folder:
 
 ```bash
-cd reflexrush
+cd reactionlab
 ```
 
 Install dependencies:
@@ -105,7 +103,6 @@ This project was built as a small interactive web app to practice:
 - Randomized delays
 - Local storage
 - Responsive UI design
-- Building a polished frontend project for a portfolio
 
 ## Notes on Accuracy
 
@@ -123,7 +120,7 @@ Because of this, scores should be treated as a fun estimate rather than a scient
 
 Possible features to add later:
 
-- 5-round challenge mode
+- Multiplayer 5-round challenge mode
 - Leaderboard
 - Sound effects
 - Dark/light theme toggle
@@ -133,8 +130,4 @@ Possible features to add later:
 
 ## License
 
-This project is open source and available under the MIT License.
-
-## Author
-
-Created by [Your Name](https://github.com/your-username).
+MIT
